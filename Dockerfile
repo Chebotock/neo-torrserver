@@ -1,25 +1,27 @@
 FROM ubuntu:22.04
 
-# Используем встроенную переменную Docker для определения архитектуры сборки
-ARG TARGETARCH
-
 # Устанавливаем curl и сертификаты
 RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Создаем рабочую директорию
 RUN mkdir -p /torrserver/db && chmod -R 777 /torrserver
 
-# Скрипт автоматически скачает нужный файл: amd64 для Intel или arm64 для ARM процессоров
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-        TS_ARCH="arm64"; \
-    else \
-        TS_ARCH="amd64"; \
-    fi && \
-    curl -L -o /torrserver/TorrServer "https://github.com{TS_ARCH}"
+# Скачиваем сразу ОБА файла (для обычных процессоров и для ARM). Весят они мало.
+RUN curl -L -o /torrserver/TorrServer-amd64 https://github.com
+RUN curl -L -o /torrserver/TorrServer-arm64 https://github.com
 
-# Выдаем права на запуск
-RUN chmod +x /torrserver/TorrServer
+# Создаем хитрый универсальный скрипт запуска, который сам выберет нужный файл на ходу
+RUN echo '#!/bin/sh' > /torrserver/start.sh && \
+    echo 'if [ "$(uname -m)" = "aarch64" ]; then' >> /torrserver/start.sh && \
+    echo '  chmod +x /torrserver/TorrServer-arm64 && exec /torrserver/TorrServer-arm64 "$@"' >> /torrserver/start.sh && \
+    echo 'else' >> /torrserver/start.sh && \
+    echo '  chmod +x /torrserver/TorrServer-amd64 && exec /torrserver/TorrServer-amd64 "$@"' >> /torrserver/start.sh && \
+    echo 'fi' >> /torrserver/start.sh
+
+# Даем права на запуск скрипта-переключателя
+RUN chmod +x /torrserver/start.sh
 
 EXPOSE 8090
 
-CMD ["/torrserver/TorrServer", "-p", "8090", "-d", "/torrserver/db"]
+# Запускаем наш универсальный скрипт, который сам выберет файл без ошибок формата exec
+CMD ["/torrserver/start.sh", "-p", "8090", "-d", "/torrserver/db"]
